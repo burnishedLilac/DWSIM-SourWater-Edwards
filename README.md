@@ -19,7 +19,7 @@ Simulating **Sour Water** systems ($NH_3 - H_2S - CO_2 - H_2O$) poses a signific
 
  Installation & Usage
 
-1.  **Download:** Get the `SWEQ_Solver_v6.7.py` file from this repository.
+1.  **Download:** Get the `SWEQ_Solver.py` file from this repository.
 2.  **Open DWSIM:** Create a new Flowsheet or open an existing one.
 3.  **Add Unit Op:** Drag and drop a **"Custom Unit Operation (Python Script)"** from the object palette.
 4.  **Connect Streams:** Connect inlet and outlet material streams.
