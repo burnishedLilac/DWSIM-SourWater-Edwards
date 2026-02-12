@@ -1,17 +1,3 @@
-"""
-DWSIM Custom Unit Operation: Sour Water Equilibrium (SWEQ) Solver
-Thermodynamic Engine: Edwards, Newman, and Prausnitz (1978)
-
-File: SWEQ_Solver.py
-Latest Update: Implementation of v6.7 logic (Convergence Check + Robust Scoping)
-
-Features:
-- Coupled Phase & Chemical Equilibrium
-- Ionic Speciation (NH4+, HS-, HCO3-)
-- Environmental Reporting (ppm)
-- CO2 Saturation Clamp & Threshold Logic
-"""
-
 import math
 import os
 import System
