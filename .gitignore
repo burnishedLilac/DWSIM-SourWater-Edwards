@@ -1,0 +1,11 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# DWSIM backup files
+*.dwsim.bak
+*.dwxmz
+*.dwxml
+
+# Windows thumbnails
+Thumbs.db
