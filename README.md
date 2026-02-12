@@ -23,5 +23,5 @@ Simulating **Sour Water** systems ($NH_3 - H_2S - CO_2 - H_2O$) poses a signific
 2.  **Open DWSIM:** Create a new Flowsheet or open an existing one.
 3.  **Add Unit Op:** Drag and drop a **"Custom Unit Operation (Python Script)"** from the object palette.
 4.  **Connect Streams:** Connect inlet and outlet material streams.
-5.  **Paste Code:** Open the script editor in DWSIM, paste the code from `SWEQ_Solver_v6.7.py`, and save.
+5.  **Paste Code:** Open the script editor in DWSIM, paste the code from `SWEQ_Solver.py`, and save.
 6.  **Run Simulation:** The solver will compute the equilibrium and open the datasheet automatically.
