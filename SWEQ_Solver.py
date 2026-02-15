@@ -1,3 +1,13 @@
+"""
+SOUR WATER EQUILIBRIUM SOLVER (SWEQ) - v7.3.7
+Thermodynamics: Edwards (1978) + Davies Activity
+Physical: Ion-Specific Density + Rigorous Henry's Law for H2S
+Updates: Fixed H2S fugacity correlation to prevent pressure divergence.
+
+Author: Alexander
+Target: DWSIM Custom Unit Operation
+"""
+
 import math
 import sys
 import os
@@ -79,9 +89,11 @@ def calculate_equilibrium(T_K, m_in):
     K_v = {k: math.exp(calc_ln_k(v, T_R)) for k, v in EDWARDS_PARAMS.items()}
     A_d = calc_davies_A(T_K)
     m_v = (m_in['NH3'], m_in['H2S'], m_in['CO2'])
+    
     low, high = 0.0, 14.0
     err_l, _ = solve_charge_balance(low, K_v, m_v, A_d)
     err_h, _ = solve_charge_balance(high, K_v, m_v, A_d)
+    
     if err_l * err_h > 0:
         ph = 0.0 if abs(err_l) < abs(err_h) else 14.0
         _, s = solve_charge_balance(ph, K_v, m_v, A_d)
@@ -93,57 +105,52 @@ def calculate_equilibrium(T_K, m_in):
             if err > 0: low = ph
             else: high = ph
             ph = (low + high) / 2.0
+
     nh3, h2s, co2 = s['NH3'], s['H2S'], s['CO2']
+    
+    # Henry's Law - NH3 (Edwards 1978)
     ln_nh3 = 178.339 - 15517.91/T_R - 25.6767*math.log(T_R) + 0.01966*T_R + (131.4/T_R - 0.1682)*nh3 + 0.06*(2*m_in['CO2'] + m_in['H2S'])
     p_nh3 = math.exp(ln_nh3) * nh3
-    ln_h2s = 8.8 + 0.015 * (T_R - 560)
-    p_h2s = math.exp(ln_h2s + (-0.05*nh3 + (0.965 - 486.0/T_R)*m_in['CO2'])) * h2s
+    
+    # Henry's Law - H2S (Edwards 1978 Rigorous Correlation)
+    # Calibrated for Result in PSIA/molal
+    # ln(H) = A + B/T + C*ln(T) + D*T
+    H_h2s_coeffs = [158.36, -9172.1, -23.01, 0.022] # Scale: PSIA
+    ln_H_h2s = H_h2s_coeffs[0] + H_h2s_coeffs[1]/T_K + H_h2s_coeffs[2]*math.log(T_K) + H_h2s_coeffs[3]*T_K
+    
+    # Interaction with NH3 (Salting-out effect)
+    interaction_h2s = (-0.05 * nh3) 
+    
+    p_h2s = math.exp(ln_H_h2s + interaction_h2s) * h2s
+    
+    # Henry's Law - CO2 (Edwards 1978)
     p_co2 = 0.0; clamped = False
     if m_in['CO2'] > MIN_VAL:
         ln_h_co2 = 301.68 - 34096.6/T_R + 1.2285e8/(T_R**2) - 6.4752e10/(T_R**3) + 1.1557e13/(T_R**4)
-        if (m_in['NH3'] + m_in['CO2'] + m_in['H2S']) > MIN_VAL: ln_h_co2 += -0.09*(nh3 - m_in['CO2'] - m_in['H2S'])
+        if (m_in['NH3'] + m_in['CO2'] + m_in['H2S']) > MIN_VAL: 
+            ln_h_co2 += -0.09*(nh3 - m_in['CO2'] - m_in['H2S'])
         val = ln_h_co2 + math.log(max(co2, 1e-20))
         if val > math.log(CO2_CRIT_P_PSI): p_co2 = CO2_CRIT_P_PSI; clamped = True
         else: p_co2 = math.exp(val)
-    p_w = (10**(5.20389 - 1733.926/(T_K - 39.485))) * 14.5038
-    p_tot_pa = (p_nh3 + p_h2s + p_co2 + p_w) * PSI_TO_PA
-    return {'ph': ph, 'P_calc': p_tot_pa, 'clamped': clamped, 'pp': {'NH3': p_nh3, 'H2S': p_h2s, 'CO2': p_co2, 'H2O': p_w}, 'liq': s}
 
-# --- Predictive Density Engine ---
+    # Water Vapor Pressure (Kell)
+    p_w = (10**(5.20389 - 1733.926/(T_K - 39.485))) * 14.5038
+    p_total_pa = (p_nh3 + p_h2s + p_co2 + p_w) * PSI_TO_PA
+    
+    return {'ph': ph, 'P_calc': p_total_pa, 'clamped': clamped, 'pp': {'NH3': p_nh3, 'H2S': p_h2s, 'CO2': p_co2, 'H2O': p_w}, 'liq': s}
+
+# --- Density Engine ---
 
 def calculate_density_rigorous(T_K, P_Pa, spec, kg_water, mass_total_kg):
-    """
-    Predicts density using ion-specific partial molar volumes.
-    """
     t_c = T_K - 273.15
-    # Pure water density (Kell correlation)
     rho_w = 1000 * (1 - (t_c + 288.9414)/(508929.2 * (t_c + 68.12963)) * (t_c - 3.9863)**2)
-    
-    # Infinite dilution partial molar volumes (cm3/mol)
-    # Ref: Adjusted from Laliberte & Cooper ionic parameters
-    v_inf = {
-        'NH4': 18.0, 
-        'HS':  20.0, 
-        'OH':  -4.0, 
-        'H':   0.0,
-        'NH3': 24.5,
-        'H2S': 35.0
-    }
-    
-    # Volume of water in Liters
+    v_inf = {'NH4': 18.0, 'HS': 20.0, 'OH': -4.0, 'H': 0.0, 'NH3': 24.5, 'H2S': 35.0}
     V_L = kg_water / (rho_w / 1000.0)
-    
-    # Contributions from each species (n * V_inf / 1000)
-    # Molality * kg_water = mols
     V_L += (spec['NH4'] * kg_water * v_inf['NH4']) / 1000.0
     V_L += (spec['HS']  * kg_water * v_inf['HS'])  / 1000.0
     V_L += (spec['NH3'] * kg_water * v_inf['NH3']) / 1000.0
     V_L += (spec['H2S'] * kg_water * v_inf['H2S']) / 1000.0
-    
-    # Final density calculation (kg / L) * 1000 = kg/m3
     rho_calc = (mass_total_kg / V_L) * 1000.0
-    
-    # Compressibility correction
     return rho_calc * (1 + 4.5e-10 * (P_Pa - 101325.0))
 
 # --- Reporting ---
@@ -154,12 +161,10 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
     is_f = res['P_calc'] > (P_op * 1.01)
     status_txt = "STABLE LIQUID"
     if is_f: status_txt = "!!! UNSTABLE - FLASHING DETECTED !!!"
-    
-    # Rigorous environmental concentration using calculated density
     h2s_mgL = (flows_h['H2S'] / total_h) * rho
     nh3_mgL = (flows_h['NH3'] / total_h) * rho
 
-    lines = [HR, " SWEQ - SOUR WATER EQUILIBRIUM SOLVER v7.3.6 ".center(W), " Ion-Specific Density Release ".center(W), HR]
+    lines = [HR, " SWEQ - SOUR WATER EQUILIBRIUM SOLVER v7.3.7 ".center(W), " Rigorous Fugacity Release ".center(W), HR]
     try: lines.append(" Date: %s " % DateTime.Now.ToString("yyyy-MM-dd HH:mm").center(W))
     except: pass
     lines.append((" User: %-16s Model: Edwards (1978) " % os.environ.get('USERNAME', 'Engineer')).center(W))
@@ -190,7 +195,8 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
     lines.append(" %s-+-%s-+-%s" % ("-"*25, "-"*15, "-"*10))
     lines.append(" %-25s | %15.2f | %10.2f " % ("Water (H2O)", flows_h['H2O'], (flows_h['H2O']/total_h)*100))
     for k in ['NH3', 'H2S', 'CO2']:
-        lines.append(" %-25s | %15.2f | %10.2f " % (k, flows_h[k], (flows_h[k]/total_h)*100))
+        m_pct = (flows_h[k] / total_h) * 100
+        lines.append(" %-25s | %15.2f | %10.2f " % (k, flows_h[k], m_pct))
     lines.append(" %-25s | %15.2f | %10.2f " % ("TOTAL", total_h, 100.00))
     lines.append("\n")
 
@@ -205,15 +211,14 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
 
     lines.append(" 4. ENVIRONMENTAL & VAPOR PREDICTIONS ".ljust(W))
     lines.append(SR)
+    c1 = 38
     lines.append(" %-38s | %s" % ("ENVIRONMENTAL (Liquid Effluent)", "VAPOR PHASE (Equilibrium Partial P)"))
     lines.append(" %s-+-%s" % ("-"*38, "-"*39))
     lines.append(" H2S Total: %15.1f mg/L      | p(H2S): %10.4f psia" % (h2s_mgL, pp['H2S']))
     lines.append(" NH3 Total: %15.1f mg/L      | p(NH3): %10.4f psia" % (nh3_mgL, pp['NH3']))
     lines.append(" Density:   %15.2f kg/m3     | p(CO2): %10.4f psia" % (rho, pp['CO2']))
     lines.append("                                        | p(H2O): %10.4f psia" % (pp['H2O']))
-    
-    if l['I'] > DAVIES_LIMIT:
-        lines.append("\n > Activity Driver exceeds Davies limit (0.5m).")
+    if l['I'] > DAVIES_LIMIT: lines.append("\n > Activity Driver exceeds Davies limit (0.5m).")
     lines.append(HR)
     lines.append(" End of Report")
     return "\n".join(lines)
@@ -224,7 +229,6 @@ def Main():
     if 'ims1' not in globals(): return
     T = ims1.GetTemperature(); P = ims1.GetPressure(); F = ims1.GetMolarFlow()
     if F < MIN_VAL: return
-    
     ids = ims1.ComponentIds; comp = ims1.GetOverallComposition()
     m_in = {'NH3': 0.0, 'H2S': 0.0, 'CO2': 0.0, 'H2O': 0.0}
     idx_m = {}
@@ -232,34 +236,25 @@ def Main():
         nc = n.lower()
         for k, tags in COMP_MAP.items():
             if any(t in nc for t in tags): m_in[k] = F * comp[i]; idx_m[k] = i; break
-            
     if m_in['H2O'] < MIN_VAL: return
     kg_w = m_in['H2O'] * MW['H2O'] / 1000.0
     molals = {k: v/kg_w for k, v in m_in.items() if k != 'H2O'}
-    
     res = calculate_equilibrium(T, molals)
     if res.get('error'): return
-
     P_o = min(res['P_calc'], 1500 * ATM_TO_PA)
     y_raw = [0.0]*len(ids)
     for k, i in idx_m.items():
         if k in res['pp']: y_raw[i] = (res['pp'][k] * PSI_TO_PA) / P_o
-    
     total_y = sum(y_raw)
     y_norm = [v/total_y if total_y > 0 else comp[i] for i, v in enumerate(y_raw)]
-    
     oms1.SetTemperature(T); oms1.SetPressure(P_o); oms1.SetOverallComposition(Array[Double](y_norm)); oms1.SetMolarFlow(1e-8)
     oms2.SetTemperature(T); oms2.SetPressure(P_o); oms2.SetOverallComposition(ims1.GetOverallComposition()); oms2.SetMolarFlow(F - 1e-8)
     oms1.Calculate(); oms2.Calculate()
-
-    # RIGOROUS DENSITY ENGINE
-    m_flows_kg_s = {k: v * MW.get(k, 28) / 1000.0 for k, v in m_in.items()}
-    total_mass_kg_s = sum(m_flows_kg_s.values())
-    rho = calculate_density_rigorous(T, P_o, res['liq'], kg_w, total_mass_kg_s)
-
-    f_h = {k: m * 3600 for k, m in m_flows_kg_s.items()}
+    m_f_kg_s = {k: v * MW.get(k, 28) / 1000.0 for k, v in m_in.items()}
+    total_m_kg_s = sum(m_f_kg_s.values())
+    rho = calculate_density_rigorous(T, P_o, res['liq'], kg_w, total_m_kg_s)
+    f_h = {k: m * 3600 for k, m in m_f_kg_s.items()}
     t_h = sum(f_h.values())
-    
     try:
         desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
         path = os.path.join(desktop, 'SWEQ_Datasheet.txt')
