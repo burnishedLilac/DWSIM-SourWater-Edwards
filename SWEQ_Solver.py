@@ -1,17 +1,3 @@
-"""
-DWSIM Custom Unit Operation: Sour Water Equilibrium (SWEQ) Solver - v7.0
-Thermodynamic Engine: Edwards, Newman, and Prausnitz (1978)
-Activity Model: Davies Equation for Ionic Strength Correction
-
-File: SWEQ_Solver.py
-
-Changelog v7.0 (The "Senior" Update):
-- NEW: Implemented Davies Equation for activity coefficients (Non-ideal liquid).
-- NEW: Activated Carbonate (CO3--) and Sulfide (S--) equilibria for high pH accuracy.
-- IMPROVED: Ionic Strength (I) calculation included in iteration loop.
-- REPORT: Added Activity Coefficients and Ionic Strength to the datasheet.
-"""
-
 import math
 import os
 import System
