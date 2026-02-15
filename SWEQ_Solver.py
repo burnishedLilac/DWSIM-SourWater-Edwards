@@ -24,7 +24,8 @@ SOLVER = {
     'MAX_ITER_PH': 250,      # Max pH bisection steps
     'MAX_ITER_ION': 50,      # Max ionic strength iterations
     'MIN_VAL': 1e-18,        # Numerical floor
-    'DAVIES_LIMIT': 0.5      # Activity model validity limit
+    'DAVIES_LIMIT_WARN': 0.5, # Yellow Zone start
+    'DAVIES_LIMIT_CRIT': 0.8  # Red Zone start (Model Breakdown)
 }
 
 # Edwards (1978) Equilibrium Constants Coefficients
@@ -193,6 +194,8 @@ def calculate_density(T_K, P_Pa, spec, kg_water, mass_total_kg):
     # Compressibility correction
     return rho_kg_m3 * (1 + 4.5e-10 * (P_Pa - 101325.0))
 
+# --- 4. REPORTING ---
+
 def generate_report(res, T, P_op, flows_h, total_h, rho):
     l = res['liq']; pp = res['pp']
     W = 80; HR = "=" * W; SR = "-" * W
@@ -200,11 +203,7 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
     
     # mg/L Calculation:
     # Conc (mg/L) = Molality (mol/kg_w) * MW (g/mol) * 1000 (mg/g) * Density_Mix (kg_mix/L_mix)
-    # Note: We approximate kg_mix ≈ kg_water for the molality conversion base, 
-    # but using rho (kg/m3) / 1000 gives kg/L.
-    
     rho_kg_L = rho / 1000.0
-    
     h2s_total_molal = l['H2S'] + l['HS'] + l['S']
     nh3_total_molal = l['NH3'] + l['NH4']
     
@@ -212,7 +211,7 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
     h2s_mgL = h2s_total_molal * CONST['MW']['H2S'] * rho_kg_L * 1000.0
     nh3_mgL = nh3_total_molal * CONST['MW']['NH3'] * rho_kg_L * 1000.0
 
-    lines = [HR, " SWEQ - SOUR WATER EQUILIBRIUM SOLVER v7.6.1 ".center(W), " Enterprise Edition - Units Patch ".center(W), HR]
+    lines = [HR, " SWEQ - SOUR WATER EQUILIBRIUM SOLVER v7.6.2 ".center(W), " Enterprise Edition - Safety Interlocked ".center(W), HR]
     try: lines.append(" Date: %s " % DateTime.Now.ToString("yyyy-MM-dd HH:mm").center(W))
     except: pass
     lines.append((" User: %-16s Model: Edwards (1978) + Dynamic Convergence " % "Alexander").center(W))
@@ -249,16 +248,26 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
     lines.append(" NH3 Total: %15.1f mg/L      | p(NH3): %10.4f psia" % (nh3_mgL, pp['NH3']))
     lines.append(" Density:   %15.2f kg/m3     | p(CO2): %10.4f psia" % (rho, pp['CO2']))
     lines.append("                                        | p(H2O): %10.4f psia" % (pp['H2O']))
-    if l['I'] > SOLVER['DAVIES_LIMIT']: lines.append("\n > Warning: Activity Driver exceeds Davies limit (0.5m).")
+
+    # --- SAFETY INTERLOCKS ---
+    if l['I'] > SOLVER['DAVIES_LIMIT_CRIT']:
+        lines.append("\n" + "!"*80)
+        lines.append(" CRITICAL WARNING: IONIC STRENGTH (%.2fm) EXCEEDS MODEL LIMIT (0.8m)" % l['I'])
+        lines.append(" RESULTS ARE PHYSICALLY INVALID. DAVIES EQUATION BREAKDOWN.")
+        lines.append(" ACTION REQUIRED: DILUTE STREAM OR USE PITZER/ENRTL MODEL.")
+        lines.append("!"*80)
+    elif l['I'] > SOLVER['DAVIES_LIMIT_WARN']:
+        lines.append("\n > Warning: Ionic Strength exceeds Davies limit (0.5m). Accuracy reduced.")
+        
     lines.append(HR + "\n End of Report")
     return "\n".join(lines)
+
 # --- 5. MAIN BRIDGE ---
 
 def Main():
     # 1. Environment Safety Check
     try:
         if 'ims1' not in globals():
-            # Only print if running in a context where print is visible (e.g. debugging)
             return 
         
         # 2. Input Retrieval
@@ -274,7 +283,6 @@ def Main():
         # 3. Component Mapping
         m_mol_s = {'NH3': 0.0, 'H2S': 0.0, 'CO2': 0.0, 'H2O': 0.0}
         idx = {}
-        found_comps = 0
         
         for i, n in enumerate(ids):
             nc = n.lower()
@@ -282,7 +290,6 @@ def Main():
                 if any(t in nc for t in tags): 
                     m_mol_s[k] = F_mol * comp[i]
                     idx[k] = i
-                    found_comps += 1
                     break
         
         if m_mol_s['H2O'] < SOLVER['MIN_VAL']: return
