@@ -1,3 +1,32 @@
+"""
+SOUR WATER EQUILIBRIUM SOLVER (SWEQ) - v7.6.2
+Copyright (C) 2026 Alexander
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, version 3 of the License.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+--------------------------------------------------------------------------------
+Thermodynamics: Edwards, Newman & Prausnitz (1978) Electrolyte Model
+Activity: Davies Equation with Dynamic Convergence Check
+Henry's Law: Direct Physical Scaling (Carroll / Sander Verified)
+Stability: Production-Grade Error Handling & Unit Standardization
+Safety: Explicit Ionic Strength Warnings (Red/Yellow Zones)
+Integration: Optimized for DWSIM Python Script Unit Operation
+
+Author: Alexander Francisco Cescon (Chemical Engineer)
+Release: Enterprise Deployment Ready - Safety Interlocked.
+--------------------------------------------------------------------------------
+"""
+
 import math
 import sys
 import os
