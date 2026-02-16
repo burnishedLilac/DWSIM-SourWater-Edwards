@@ -1,6 +1,6 @@
 # SWEQ-DWSIM: Sour Water Equilibrium Solver
 
-![Platform](https://img.shields.io/badge/platform-DWSIM-green.svg) ![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
+![Platform](https://img.shields.io/badge/platform-DWSIM-green.svg) ![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
 
 **A Semi-Rigorous Thermodynamic Unit Operation for DWSIM based on the Edwards, Newman, and Prausnitz (1978) Electrolyte Model with Activity Coefficient Corrections.**
 
@@ -47,4 +47,4 @@ Users must be aware of the following thermodynamic boundaries:
 2.  Davies, C. W. (1962). *Ion Association*. Butterworths.
 
 ## License
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the **GNU General Public License v3.0** - see the [LICENSE](LICENSE) file for details.
