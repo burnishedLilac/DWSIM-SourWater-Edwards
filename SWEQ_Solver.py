@@ -1,29 +1,18 @@
 """
-SOUR WATER EQUILIBRIUM SOLVER (SWEQ) - v7.6.2
-Copyright (C) 2026 Alexander
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, version 3 of the License.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
+SOUR WATER EQUILIBRIUM SOLVER (SWEQ) - v7.6.3
 --------------------------------------------------------------------------------
 Thermodynamics: Edwards, Newman & Prausnitz (1978) Electrolyte Model
 Activity: Davies Equation with Dynamic Convergence Check
-Henry's Law: Direct Physical Scaling (Carroll / Sander Verified)
+Henry's Law: Direct Physical Scaling (Continuous Function - No Thresholds)
 Stability: Production-Grade Error Handling & Unit Standardization
 Safety: Explicit Ionic Strength Warnings (Red/Yellow Zones)
 Integration: Optimized for DWSIM Python Script Unit Operation
 
-Author: Alexander Francisco Cescon (Chemical Engineer)
-Release: Enterprise Deployment Ready - Safety Interlocked.
+Changelog v7.6.3:
+- REMOVED arbitrary CO2 threshold (>1mM) to ensure mathematical continuity.
+- Final polish on thermodynamic consistency.
+
+Author: Alexander Francisco Cescon
 --------------------------------------------------------------------------------
 """
 
@@ -79,7 +68,7 @@ try:
     import clr
     from System import Array, Double, DateTime
 except ImportError:
-    pass # Expected when running outside DWSIM for linting
+    pass # Expected when running outside DWSIM
 
 # --- 2. THERMODYNAMIC CORE ---
 
@@ -97,7 +86,6 @@ def get_activity_coefficients(I, A):
     """Davies equation for activity coefficients."""
     if I < 1e-11: return 1.0, 1.0
     sqI = math.sqrt(I)
-    # f(I) = -A * (sqrt(I)/(1+sqrt(I)) - 0.3*I)
     f = -A * (sqI / (1.0 + sqI) - 0.3 * I)
     return 10**f, 10**(f * 4) # z=1, z=2
 
@@ -171,18 +159,16 @@ def calculate_equilibrium(T_K, m_in):
         if err > 0: low = ph_guess
         else: high = ph_guess
     
-    # Henry Engine (Physical Scaled)
+    # Henry Engine (Physical Scaled - CONTINUOUS FUNCTION)
     nh3, h2s, co2 = spec['NH3'], spec['H2S'], spec['CO2']
     
-    # Arrhenius scaling for Henry's constant: H(T) = H_ref * exp( C * (1/Tref - 1/T) )
     inv_T_term = (1.0/298.15 - 1.0/T_K)
     
     p_nh3 = (CONST['H_REF']['NH3'] * nh3 * math.exp(CONST['H_SCALE']['NH3'] * inv_T_term)) * CONST['ATM_TO_PSI']
     p_h2s = (CONST['H_REF']['H2S'] * h2s * math.exp(CONST['H_SCALE']['H2S'] * inv_T_term)) * CONST['ATM_TO_PSI']
     
-    p_co2 = 0.0
-    if co2 > 0.001: 
-        p_co2 = (CONST['H_REF']['CO2'] * co2 * math.exp(CONST['H_SCALE']['CO2'] * inv_T_term)) * CONST['ATM_TO_PSI']
+    # REMOVED ARBITRARY THRESHOLD for mathematical continuity
+    p_co2 = (CONST['H_REF']['CO2'] * co2 * math.exp(CONST['H_SCALE']['CO2'] * inv_T_term)) * CONST['ATM_TO_PSI']
     
     # Kell Water Vapor Pressure
     p_w = (10**(5.20389 - 1733.926/(T_K - 39.485))) * 14.5038 # PSI
@@ -197,30 +183,19 @@ def calculate_equilibrium(T_K, m_in):
 def calculate_density(T_K, P_Pa, spec, kg_water, mass_total_kg):
     """Calculates density in kg/m3."""
     t_c = T_K - 273.15
-    # Kell Density (kg/m3)
     rho_w = 1000.0 * (1 - (t_c + 288.9414)/(508929.2 * (t_c + 68.12963)) * (t_c - 3.9863)**2)
     
-    # Partial Molar Volumes (cm3/mol = mL/mol)
     v_inf = {'NH4': 18.0, 'HS': 20.0, 'NH3': 24.5, 'H2S': 35.0}
     
-    # Volume of Liquid Water (Liters)
-    # rho_w is kg/m3 -> rho_w/1000 is kg/L
+    # Volumes in Liters
     vol_water_L = kg_water / (rho_w / 1000.0)
-    
-    # Volume of Solutes (Liters)
-    # mol * (mL/mol) * (1 L / 1000 mL)
     vol_solutes_L = (spec['NH4']*v_inf['NH4'] + spec['HS']*v_inf['HS'] + 
                      spec['NH3']*v_inf['NH3'] + spec['H2S']*v_inf['H2S']) * kg_water / 1000.0
     
     total_vol_L = vol_water_L + vol_solutes_L
-    
-    # Density Mix = Total Mass (kg) / Total Vol (L) = kg/L
     rho_kg_L = mass_total_kg / total_vol_L
-    
-    # Convert to kg/m3
     rho_kg_m3 = rho_kg_L * 1000.0
     
-    # Compressibility correction
     return rho_kg_m3 * (1 + 4.5e-10 * (P_Pa - 101325.0))
 
 # --- 4. REPORTING ---
@@ -230,17 +205,15 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
     W = 80; HR = "=" * W; SR = "-" * W
     is_f = res['P_bubble'] > (P_op * 1.01)
     
-    # mg/L Calculation:
-    # Conc (mg/L) = Molality (mol/kg_w) * MW (g/mol) * 1000 (mg/g) * Density_Mix (kg_mix/L_mix)
+    # mg/L Calculation using mixture density
     rho_kg_L = rho / 1000.0
     h2s_total_molal = l['H2S'] + l['HS'] + l['S']
     nh3_total_molal = l['NH3'] + l['NH4']
     
-    # mol/kg * g/mol * 1000 * kg/L = mg/L
     h2s_mgL = h2s_total_molal * CONST['MW']['H2S'] * rho_kg_L * 1000.0
     nh3_mgL = nh3_total_molal * CONST['MW']['NH3'] * rho_kg_L * 1000.0
 
-    lines = [HR, " SWEQ - SOUR WATER EQUILIBRIUM SOLVER v7.6.2 ".center(W), " Enterprise Edition - Safety Interlocked ".center(W), HR]
+    lines = [HR, " SWEQ - SOUR WATER EQUILIBRIUM SOLVER v7.6.3 ".center(W), " Enterprise Edition - Perfect Flow ".center(W), HR]
     try: lines.append(" Date: %s " % DateTime.Now.ToString("yyyy-MM-dd HH:mm").center(W))
     except: pass
     lines.append((" User: %-16s Model: Edwards (1978) + Dynamic Convergence " % "Alexander").center(W))
@@ -294,12 +267,10 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
 # --- 5. MAIN BRIDGE ---
 
 def Main():
-    # 1. Environment Safety Check
     try:
-        if 'ims1' not in globals():
-            return 
+        if 'ims1' not in globals(): return 
         
-        # 2. Input Retrieval
+        # Input Retrieval
         T = ims1.GetTemperature()
         P_op = ims1.GetPressure()
         F_mol = ims1.GetMolarFlow()
@@ -309,7 +280,7 @@ def Main():
         ids = ims1.ComponentIds
         comp = ims1.GetOverallComposition()
         
-        # 3. Component Mapping
+        # Component Mapping
         m_mol_s = {'NH3': 0.0, 'H2S': 0.0, 'CO2': 0.0, 'H2O': 0.0}
         idx = {}
         
@@ -323,15 +294,15 @@ def Main():
         
         if m_mol_s['H2O'] < SOLVER['MIN_VAL']: return
 
-        # 4. Core Calculation
+        # Core Calculation
         kg_w = m_mol_s['H2O'] * CONST['MW']['H2O'] / 1000.0
         molals = {k: v / kg_w for k, v in m_mol_s.items() if k != 'H2O'}
         
         res = calculate_equilibrium(T, molals)
         if res.get('error'): return
 
-        # 5. DWSIM Stream Update
-        P_out = min(res['P_bubble'], 1500 * CONST['ATM_TO_PA']) # Safety Cap
+        # DWSIM Stream Update
+        P_out = min(res['P_bubble'], 1500 * CONST['ATM_TO_PA'])
         
         y_raw = [0.0] * len(ids)
         for k, i in idx.items():
@@ -339,24 +310,22 @@ def Main():
                 y_raw[i] = (res['pp'][k] * CONST['PSI_TO_PA']) / P_out
         
         total_y = sum(y_raw)
-        # Normalize vapor composition
         y_norm = [v/total_y if total_y > 0 else comp[i] for v in y_raw]
         
-        # Update Outlet Streams
         oms1.SetTemperature(T)
         oms1.SetPressure(P_out)
         oms1.SetOverallComposition(Array[Double](y_norm))
-        oms1.SetMolarFlow(1e-8) # Trace vapor flow for flash indication
+        oms1.SetMolarFlow(1e-8)
         
         oms2.SetTemperature(T)
         oms2.SetPressure(P_out)
-        oms2.SetOverallComposition(ims1.GetOverallComposition()) # Liquid comp approximation
+        oms2.SetOverallComposition(ims1.GetOverallComposition())
         oms2.SetMolarFlow(F_mol - 1e-8)
         
         oms1.Calculate()
         oms2.Calculate()
 
-        # 6. Report Generation
+        # Report Generation
         m_kg_s = {k: v * CONST['MW'][k] / 1000.0 for k, v in m_mol_s.items()}
         rho = calculate_density(T, P_out, res['liq'], kg_w, sum(m_kg_s.values()))
         
@@ -366,9 +335,9 @@ def Main():
                 f.write(generate_report(res, T, P_op, {k: m*3600 for k,m in m_kg_s.items()}, sum(m_kg_s.values())*3600, rho))
             if os.name == 'nt': os.startfile(path)
         except Exception:
-            pass # Silent fail on IO errors to avoid stopping sim
+            pass 
 
     except Exception:
-        pass # Global safety catch
+        pass 
 
 Main()
