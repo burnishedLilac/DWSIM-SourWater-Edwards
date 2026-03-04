@@ -1,50 +1,32 @@
-# SWEQ-DWSIM: Sour Water Equilibrium Solver
+# SWEQ - Sour Water Equilibrium Solver 💧⚙️
 
-![Platform](https://img.shields.io/badge/platform-DWSIM-green.svg) ![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
+**Version:** 8.1.0 (Enterprise Pitzer Edition)  
+**Integration:** DWSIM Python Script Unit Operation  
+**License:** GPLv3  
 
-**A Semi-Rigorous Thermodynamic Unit Operation for DWSIM based on the Edwards, Newman, and Prausnitz (1978) Electrolyte Model with Activity Coefficient Corrections.**
+SWEQ is an industrial-grade, open-source thermodynamic solver designed to calculate the vapor-liquid equilibrium (VLE) and ionic speciation of highly concentrated sour water systems ($NH_3 - H_2S - CO_2 - H_2O$). Built as a native Python Script for DWSIM, it bridges the gap between academic electrolyte models and heavy-duty refinery simulation.
 
-## Overview
-Simulating Sour Water systems (NH3 - H2S - CO2 - H2O) poses a significant challenge in process engineering. Standard Cubic Equations of State often fail to predict the pH-dependent behavior of weak electrolytes, leading to inaccurate Bubble Point, pH, and corrosion predictions.
+## 🚀 Key Features
 
-SWEQ-DWSIM addresses this by implementing a chemical equilibrium solver directly within DWSIM as a Custom Python Unit Operation. The solver includes non-ideal liquid phase corrections suitable for industrial screening and process safety analysis.
+* **Extreme Concentration Engine:** Bypasses the traditional 0.5 - 0.8 molal physical limits of the extended Debye-Hückel/Davies equations. SWEQ v8.1 stably converges at ionic strengths exceeding **6.0+ molal**, handling the harshest stripper bottoms and atmospheric overhead condensates.
+* **State-of-the-Art Thermodynamics:** * **Equilibrium:** Edwards, Newman & Prausnitz (1978) weak electrolyte framework.
+  * **Activity Coefficients:** Implementation of the specific **Pitzer Activity Coefficient Model** calibrated for sour water (Rumpf et al., 1999) for $NH_4^+/HS^-$ pairs.
+  * **Hybrid Fallback:** Seamlessly utilizes the Davies equation as a thermodynamic fallback for minor carbonate species ($HCO_3^-, CO_3^{2-}$).
+* **Advanced Non-Ideal Physics:** * Exact modeling of the "salting-out" effect for dissolved neutral gases ($\gamma_{NH_3}$ and $\gamma_{H_2S}$).
+  * Osmotic mole fraction correction for water activity ($a_w$) depression in heavy brines.
+  * Poynting correction ($v^\infty$) for high-pressure operations.
+* **Robust Numerical Solver:** Features a custom charge-balance bisection loop fortified with a **Successive Substitution Damping algorithm** ($w = 0.5$). This acts as a mathematical shock absorber, completely eliminating non-linear oscillation and `Math Domain` errors during extreme stoichiometric imbalances.
+* **Automated Engineering Reports:** Generates comprehensive, scannable plain-text datasheets containing environmental metrics (mg/L), pH, phase statuses, bubble point pressures, and detailed chemical speciation with individual Pitzer coefficients.
 
-## Key Features
+## 🛠️ Usage in DWSIM
 
-### Thermodynamic Framework
-* **Electrolyte Model:** Implements the Edwards, Newman, and Prausnitz (1978) correlations.
-* **Activity Coefficients:** Utilizes the Davies Equation with temperature-dependent dielectric parameters to correct for non-ideality in the liquid phase.
-* **Iterative Solver:** Features a self-consistent loop that converges Ionic Strength and Activity Coefficients simultaneously with the charge balance.
+1. Add a **Python Script** Unit Operation to your DWSIM flowsheet.
+2. Connect an inlet stream (`ims1`) and two outlet streams (liquid `oms1`, vapor `oms2`).
+3. Paste the contents of `SWEQ_v8.1.py` into the script editor.
+4. Run the flowsheet. The solver will automatically detect the components (case-insensitive mapping for Ammonia, Hydrogen Sulfide, Carbon Dioxide, and Water), perform the flash calculation, update the streams, and save the detailed `SWEQ_Datasheet.txt` to your Desktop or `C:\Temp\`.
 
-### Extended Chemistry
-* **Multi-Step Dissociation:** Handles the full equilibrium chain for accurate high-pH simulation, including Ammonia, Hydrogen Sulfide, and Carbon Dioxide dissociation.
-* **Alkaline Systems:** Capable of simulating caustic scrubbers (pH > 10) due to the inclusion of Carbonate and Sulfide ions.
+## 📚 References
+* Edwards, T. J., Maurer, G., Newman, J., & Prausnitz, J. M. (1978). *Vapor‐liquid equilibria in multicomponent aqueous solutions of volatile weak electrolytes*. AIChE Journal.
+* Rumpf, B., Pérez-Salado Kamps, Á., Sing, R., & Maurer, G. (1999). *Simultaneous solubility of ammonia and hydrogen sulfide in water at temperatures from 313 K to 393 K*. Fluid Phase Equilibria.
 
-### Operational Safety & Compliance
-* **Safety Flash:** Calculates the Incipient Bubble Pressure to detect flashing risks in transfer lines.
-* **Environmental Reporting:** Automatically calculates Total H2S and NH3 in mg/L (corrected for fluid density) for environmental compliance verification.
-* **Stability Warnings:** Alerts the user if the Ionic Strength exceeds the valid range for the Davies equation (I > 0.5m).
-
-## Installation & Usage
-
-1.  Download the `SWEQ_Solver.py` file from this repository.
-2.  Open DWSIM and create a new Flowsheet or open an existing one.
-3.  Add a **"Custom Unit Operation (Python Script)"** from the object palette.
-4.  Connect inlet and outlet material streams.
-5.  Open the script editor in DWSIM, paste the code from `SWEQ_Solver.py`, and save.
-6.  Run the simulation. The solver will compute the equilibrium and generate a detailed text datasheet.
-
-## Engineering Limitations
-
-Users must be aware of the following thermodynamic boundaries:
-
-1.  **Ionic Strength Limit:** The Davies equation is rigorously valid for ionic strengths below 0.5 m. For high-salinity brines, accuracy may decrease.
-2.  **Vapor Phase Assumption:** The model assumes an ideal gas phase (fugacity coefficient = 1). For pressures significantly above 10-15 atm, this may overestimate the bubble point.
-3.  **Water Activity:** The model assumes the solvent follows Raoult's Law without activity correction.
-
-## Technical References
-1.  Edwards, T. J., Newman, J., & Prausnitz, J. M. (1978). *Thermodynamics of vapor-liquid equilibria in neutral and aqueous solutions of volatile weak electrolytes*. AIChE Journal.
-2.  Davies, C. W. (1962). *Ion Association*. Butterworths.
-
-## License
-This project is licensed under the **GNU General Public License v3.0** - see the [LICENSE](LICENSE) file for details.
+---
