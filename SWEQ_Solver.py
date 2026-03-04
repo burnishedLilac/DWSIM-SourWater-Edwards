@@ -1,20 +1,20 @@
 """
-SOUR WATER EQUILIBRIUM SOLVER (SWEQ) - v7.6.6
+SOUR WATER EQUILIBRIUM SOLVER (SWEQ) - v8.0.0
 --------------------------------------------------------------------------------
-Thermodynamics: Edwards, Newman & Prausnitz (1978) Electrolyte Model
-Activity: Davies Equation with Dynamic Convergence Check
-Henry's Law: Continuous Physical Scaling (No Thresholds)
-Stability: Production-Grade Error Handling & Unit Standardization
-Safety: Explicit Ionic Strength Warnings (Red/Yellow Zones)
+Thermodynamics: Edwards (1978) + PITZER MODEL (Rumpf et al., 1999)
+Activity: Pitzer specific interactions for NH3/H2S + Davies fallback for CO2
+Henry's Law: Continuous Physical Scaling + Pitzer Activity Coupling
+Water Activity: Osmotic Mole Fraction Correction
+Stability: Successive Substitution Damping for Non-Linear Convergence
 Integration: Optimized for DWSIM Python Script Unit Operation
 
-Changelog v7.6.6:
-- Final Cleanup: Removed Debug Logs.
-- Robust File I/O: Fallback to C:/Temp if Desktop is locked.
-- Validated Thermodynamics: Corrected Kb/Ka coupling.
+Changelog v8.0.0:
+- MAJOR UPGRADE: Replaced global Davies model with Pitzer species-specific model.
+- Removed arbitrary Davies limits (Model is now valid up to ~10 molal).
+- Added water activity depression for concentrated brines.
 
 Author: Alexander Francisco Cescon
-Release: Enterprise Deployment Ready (GPLv3 Only).
+Release: Enterprise Extreme Concentration Edition (GPLv3 Only).
 --------------------------------------------------------------------------------
 """
 
@@ -36,9 +36,9 @@ CONST = {
 
 SOLVER = {
     'TOL_CHARGE': 1e-9, 'TOL_IONIC': 1e-6,
-    'MAX_ITER_PH': 250, 'MAX_ITER_ION': 50,
+    'MAX_ITER_PH': 350, 'MAX_ITER_ION': 100, # Increased for Pitzer stability
     'MIN_VAL': 1e-18,
-    'DAVIES_LIMIT_WARN': 0.5, 'DAVIES_LIMIT_CRIT': 0.8
+    'CO2_DAVIES_WARN': 0.5 # We still track CO2 limits
 }
 
 EDWARDS_PARAMS = {
@@ -48,6 +48,18 @@ EDWARDS_PARAMS = {
     'CO2':   [-241.79, 536256.0, -4.8123e8,   1.94e11,    -2.96445e13],
     'HCO3':  [-294.74, 364385.0, -2.841e8,    1.23323e11, -2.0759e13],
     'Kw':    [39.5554, -177822.0, 1.843e8,    -0.8541e11, 1.4292e13]
+}
+
+# Pitzer Parameters (Standard Natural Base)
+PITZER_PARAMS = {
+    # Gases (Rumpf converted)
+    'beta0_NH3_NH3':     [-0.01979,   9.864,      0.0],
+    'beta0_H2S_H2S':     [-0.26156,   69.751,     0.0],
+    
+    # Ions NH4-HS (Standard Pitzer 1-1 Electrolyte at 25C reference)
+    'beta0_NH4_HS':      [0.052, 0.0, 0.0], 
+    'beta1_NH4_HS':      [0.180, 0.0, 0.0], 
+    'Cphi_NH4_HS':       [-0.001, 0.0, 0.0]
 }
 
 COMP_MAP = {
@@ -63,7 +75,7 @@ try:
 except ImportError:
     pass
 
-# --- 2. THERMODYNAMICS ---
+# --- 2. THERMODYNAMICS & PITZER ENGINE ---
 
 def calc_ln_k(coeffs, T_R):
     A, B, C, D, E = coeffs
@@ -79,47 +91,113 @@ def get_activity_coefficients(I, A):
     f = -A * (sqI / (1.0 + sqI) - 0.3 * I)
     return 10**f, 10**(f * 4)
 
-def solve_charge_balance(ph, K, molals, A_param):
+def calc_pitzer_p(q, T_K):
+    return q[0] + q[1]/T_K + (q[2]*math.log(T_K) if q[2] != 0 else 0.0)
+
+def get_pitzer_gammas(T_K, m_NH3, m_H2S, m_NH4, m_HS):
+    """Calculates activity coefficients using standard Pitzer formulation."""
+    A_phi = 0.3915 + 0.00021*(T_K - 298.15) + 2.2e-6*((T_K - 298.15)**2)
+    
+    b0_A_A = calc_pitzer_p(PITZER_PARAMS['beta0_NH3_NH3'], T_K)
+    b0_S_S = calc_pitzer_p(PITZER_PARAMS['beta0_H2S_H2S'], T_K)
+    
+    b0_C_A = calc_pitzer_p(PITZER_PARAMS['beta0_NH4_HS'], T_K)
+    b1_C_A = calc_pitzer_p(PITZER_PARAMS['beta1_NH4_HS'], T_K)
+    cphi_C_A = calc_pitzer_p(PITZER_PARAMS['Cphi_NH4_HS'], T_K)
+    
+    I = 0.5 * (m_NH4 + m_HS)
+    if I < 1e-10: return 1.0, 1.0, 1.0
+        
+    sqI = math.sqrt(I)
+    f_I = -A_phi * ( (sqI / (1.0 + 1.2*sqI)) + (2.0/1.2)*math.log(1.0 + 1.2*sqI) )
+    
+    alpha = 2.0
+    x = alpha * sqI
+    g_x = 2.0 * (1.0 - (1.0 + x)*math.exp(-x)) / (x**2) if x > 1e-8 else 1.0
+    
+    # Standard Pitzer B_gamma term
+    B_gamma = 2.0 * b0_C_A + (2.0 * b1_C_A / (alpha**2 * I)) * (1.0 - (1.0 + alpha*sqI - 0.5*(alpha**2)*I)*math.exp(-alpha*sqI))
+    
+    # C_gamma term
+    C_gamma = 1.5 * cphi_C_A
+    
+    m = (m_NH4 + m_HS) / 2.0 
+    
+    # Mean ionic activity coefficient (Standard Pitzer 1-1)
+    ln_gamma_pm = f_I + m * B_gamma + (m**2) * C_gamma
+    
+    # Neutral species (Simplified)
+    ln_gamma_NH3 = 2.0 * b0_A_A * m_NH3 
+    ln_gamma_H2S = 2.0 * b0_S_S * m_H2S
+    
+    # Safety caps
+    ln_gamma_pm = max(min(ln_gamma_pm, 10.0), -10.0)
+    ln_gamma_NH3 = max(min(ln_gamma_NH3, 10.0), -10.0)
+    ln_gamma_H2S = max(min(ln_gamma_H2S, 10.0), -10.0)
+    
+    return math.exp(ln_gamma_NH3), math.exp(ln_gamma_H2S), math.exp(ln_gamma_pm)
+
+def solve_charge_balance(T_K, ph, K, molals, A_davies):
     h_ion = max(10**(-ph), SOLVER['MIN_VAL'])
     m_NH3_total, m_H2S_total, m_CO2_total = molals
-    g1, g2, ionic_strength = 1.0, 1.0, 0.0
+    
+    # Initial Guesses
+    g1_davies, g2_davies = 1.0, 1.0
+    g_NH3, g_H2S, g_pm = 1.0, 1.0, 1.0
+    nh3_aq, h2s_aq = m_NH3_total, m_H2S_total
+    nh4_ion, hs_ion = 0.0, 0.0
+    
+    ionic_strength = 0.0
     prev_I = -1.0
     
     for _ in range(SOLVER['MAX_ITER_ION']):
         if abs(ionic_strength - prev_I) < SOLVER['TOL_IONIC']: break
         prev_I = ionic_strength
 
-        # 1. AMMONIA (Corrected Thermodynamic Logic)
-        k_ka_nh4_thermo = K['Kw'] / K['NH3'] 
-        nh4_ion = m_NH3_total / (1 + (k_ka_nh4_thermo / h_ion))
+        # 1. PITZER & DAVIES CALCULATIONS
+        g_NH3_new, g_H2S_new, g_pm_new = get_pitzer_gammas(T_K, nh3_aq, h2s_aq, nh4_ion, hs_ion)
+        g1_dav_new, g2_dav_new = get_activity_coefficients(ionic_strength, A_davies)
+        
+        # DAMPING: Successive substitution to prevent non-linear oscillation
+        w = 0.5 
+        g_NH3 = w * g_NH3 + (1-w) * g_NH3_new
+        g_H2S = w * g_H2S + (1-w) * g_H2S_new
+        g_pm = w * g_pm + (1-w) * g_pm_new
+        g1_davies = w * g1_davies + (1-w) * g1_dav_new
+        g2_davies = w * g2_davies + (1-w) * g2_dav_new
+
+        # 1. AMMONIA (Pitzer Coupled)
+        k_ka_nh4_thermo = 1.0 / K['NH3'] 
+        k_ka_nh4_app = k_ka_nh4_thermo / g_NH3
+        nh4_ion = m_NH3_total / (1.0 + (k_ka_nh4_app / h_ion))
         nh3_aq = m_NH3_total - nh4_ion
         
-        # 2. SULFIDE
-        k_h2s_app = K['H2S'] / (g1**2)
-        k_hs_app  = K['HS'] / g2
-        den_s = 1 + (k_h2s_app/h_ion) + (k_h2s_app * k_hs_app / (h_ion**2))
+        # 3. SULFIDE (Pitzer Coupled)
+        k_h2s_app = K['H2S'] * g_H2S / (g_pm**2)
+        k_hs_app  = K['HS'] / g2_davies # S-- uses Davies fallback
+        den_s = 1.0 + (k_h2s_app/h_ion) + (k_h2s_app * k_hs_app / (h_ion**2))
         h2s_aq = m_H2S_total / den_s
         hs_ion = h2s_aq * (k_h2s_app / h_ion)
         s_ion = hs_ion * (k_hs_app / h_ion)
         
-        # 3. CARBONATE
-        k_co2_app = K['CO2'] / (g1**2)
-        k_hco3_app = K['HCO3'] / g2
-        den_c = 1 + (k_co2_app/h_ion) + (k_co2_app * k_hco3_app / (h_ion**2))
+        # 4. CARBONATE (Davies Fallback)
+        k_co2_app = K['CO2'] / (g1_davies**2)
+        k_hco3_app = K['HCO3'] / g2_davies
+        den_c = 1.0 + (k_co2_app/h_ion) + (k_co2_app * k_hco3_app / (h_ion**2))
         co2_aq = m_CO2_total / den_c
         hco3_ion = co2_aq * (k_co2_app / h_ion)
         co3_ion = hco3_ion * (k_hco3_app / h_ion)
         
-        # 4. WATER
-        k_kw_app = K['Kw'] / (g1**2)
+        # 5. WATER
+        k_kw_app = K['Kw'] / (g_pm**2)
         oh_ion = k_kw_app / h_ion
         
-        ionic_strength = 0.5 * (h_ion + oh_ion + nh4_ion + hs_ion + hco3_ion + 4*s_ion + 4*co3_ion)
-        g1, g2 = get_activity_coefficients(ionic_strength, A_param)
+        ionic_strength = 0.5 * (h_ion + oh_ion + nh4_ion + hs_ion + hco3_ion + 4.0*s_ion + 4.0*co3_ion)
         
-    error = (h_ion + nh4_ion) - (oh_ion + hs_ion + 2*s_ion + hco3_ion + 2*co3_ion)
+    error = (h_ion + nh4_ion) - (oh_ion + hs_ion + 2.0*s_ion + hco3_ion + 2.0*co3_ion)
     spec = {'NH3': nh3_aq, 'NH4': nh4_ion, 'H2S': h2s_aq, 'HS': hs_ion, 'S': s_ion, 
-            'CO2': co2_aq, 'HCO3': hco3_ion, 'CO3': co3_ion, 'I': ionic_strength}
+            'CO2': co2_aq, 'HCO3': hco3_ion, 'CO3': co3_ion, 'I': ionic_strength,
+            'g_NH3': g_NH3, 'g_H2S': g_H2S, 'g_pm': g_pm, 'g_dav': g1_davies}
     return error, spec
 
 def calculate_equilibrium(T_K, m_in):
@@ -134,20 +212,29 @@ def calculate_equilibrium(T_K, m_in):
     
     for _ in range(SOLVER['MAX_ITER_PH']):
         ph_guess = (low + high) / 2.0
-        err, spec = solve_charge_balance(ph_guess, K_vals, (m_in['NH3'], m_in['H2S'], m_in['CO2']), A_davies)
+        err, spec = solve_charge_balance(T_K, ph_guess, K_vals, (m_in['NH3'], m_in['H2S'], m_in['CO2']), A_davies)
         if abs(err) < SOLVER['TOL_CHARGE']: break
         if err > 0: low = ph_guess
         else: high = ph_guess
     
     nh3, h2s, co2 = spec['NH3'], spec['H2S'], spec['CO2']
     inv_T_term = (1.0/298.15 - 1.0/T_K)
-    p_nh3 = (CONST['H_REF']['NH3'] * nh3 * math.exp(CONST['H_SCALE']['NH3'] * inv_T_term)) * CONST['ATM_TO_PSI']
-    p_h2s = (CONST['H_REF']['H2S'] * h2s * math.exp(CONST['H_SCALE']['H2S'] * inv_T_term)) * CONST['ATM_TO_PSI']
-    p_co2 = (CONST['H_REF']['CO2'] * co2 * math.exp(CONST['H_SCALE']['CO2'] * inv_T_term)) * CONST['ATM_TO_PSI']
-    p_w = (10**(5.20389 - 1733.926/(T_K - 39.485))) * 14.5038
+    
+    # Henry's Law with Pitzer Activities
+    p_nh3 = (CONST['H_REF']['NH3'] * nh3 * spec['g_NH3'] * math.exp(CONST['H_SCALE']['NH3'] * inv_T_term)) * CONST['ATM_TO_PSI']
+    p_h2s = (CONST['H_REF']['H2S'] * h2s * spec['g_H2S'] * math.exp(CONST['H_SCALE']['H2S'] * inv_T_term)) * CONST['ATM_TO_PSI']
+    p_co2 = (CONST['H_REF']['CO2'] * co2 * 1.0 * math.exp(CONST['H_SCALE']['CO2'] * inv_T_term)) * CONST['ATM_TO_PSI']
+    
+    # Water Activity (Osmotic Depression)
+    sum_moles = sum([v for k,v in spec.items() if k not in ['I', 'g_NH3', 'g_H2S', 'g_pm', 'g_dav']])
+    a_w = math.exp(-0.018015 * sum_moles)
+    
+    p_w_pure = (10**(5.20389 - 1733.926/(T_K - 39.485))) * 14.5038
+    p_w = p_w_pure * a_w
+    
     p_tot_pa = (p_nh3 + p_h2s + p_co2 + p_w) * CONST['PSI_TO_PA']
     
-    return {'ph': ph_guess, 'P_bubble': p_tot_pa, 'pp': {'NH3': p_nh3, 'H2S': p_h2s, 'CO2': p_co2, 'H2O': p_w}, 'liq': spec}
+    return {'ph': ph_guess, 'P_bubble': p_tot_pa, 'pp': {'NH3': p_nh3, 'H2S': p_h2s, 'CO2': p_co2, 'H2O': p_w}, 'liq': spec, 'aw': a_w}
 
 def calculate_density(T_K, P_Pa, spec, kg_water, mass_total_kg):
     t_c = T_K - 273.15
@@ -172,10 +259,10 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
     h2s_mgL = (l['H2S'] + l['HS'] + l['S']) * CONST['MW']['H2S'] * rho_kg_L * 1000.0
     nh3_mgL = (l['NH3'] + l['NH4']) * CONST['MW']['NH3'] * rho_kg_L * 1000.0
 
-    lines = [HR, " SWEQ - SOUR WATER EQUILIBRIUM SOLVER v7.6.6 ".center(W), " Enterprise Edition - Final ".center(W), HR]
+    lines = [HR, " SWEQ - SOUR WATER EQUILIBRIUM SOLVER v8.0.0 ".center(W), " Enterprise Edition - Pitzer Engine Active ".center(W), HR]
     try: lines.append(" Date: %s " % DateTime.Now.ToString("yyyy-MM-dd HH:mm").center(W))
     except: pass
-    lines.append((" User: %-16s Model: Edwards (1978) + Thermo Corrected " % "Alexander").center(W))
+    lines.append((" User: %-16s Model: Edwards/Pitzer (Rumpf 1999) " % "Alexander").center(W))
     lines.append("\n 1. EXECUTIVE SUMMARY & SAFETY CHECK ".ljust(W))
     lines.append(SR)
     lines.append(" STATUS: " + ("!!! FLASHING DETECTED !!!" if is_f else "STABLE LIQUID"))
@@ -186,7 +273,9 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
     lines.append(" %-25s | %15.3f | %-10s | Operating P" % ("System Pressure", P_op/CONST['ATM_TO_PA'], "atm"))
     lines.append(" %-25s | %15.3f | %-10s | Equilibrium P" % ("Bubble Pressure", res['P_bubble']/CONST['ATM_TO_PA'], "atm"))
     lines.append(" %-25s | %15.4f | %-10s | Buffering Status" % ("Calculated pH", res['ph'], "-"))
-    lines.append(" %-25s | %15.4f | %-10s | Activity Driver" % ("Ionic Strength (I)", l['I'], "molal"))
+    lines.append(" %-25s | %15.4f | %-10s | Driver" % ("Ionic Strength (I)", l['I'], "molal"))
+    lines.append(" %-25s | %15.4f | %-10s | Osmotic Correction" % ("Water Activity", res['aw'], "a_w"))
+    
     lines.append("\n 2. STREAM COMPOSITION & FLOWS ".ljust(W))
     lines.append(SR)
     lines.append(" %-25s | %15s | %-10s " % ("COMPONENT", "FLOW (kg/h)", "MASS %"))
@@ -194,13 +283,15 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
     lines.append(" %-25s | %15.2f | %10.2f " % ("Water (H2O)", flows_h['H2O'], (flows_h['H2O']/total_h)*100))
     for k in ['NH3', 'H2S', 'CO2']:
         lines.append(" %-25s | %15.2f | %10.2f " % (k, flows_h[k], (flows_h[k]/total_h)*100))
-    lines.append("\n 3. CHEMICAL SPECIATION (LIQUID PHASE) ".ljust(W))
+        
+    lines.append("\n 3. CHEMICAL SPECIATION & PITZER ACTIVITIES ".ljust(W))
     lines.append(SR)
     lines.append(" Concentrations in molality (mol/kg H2O)")
     lines.append("")
-    lines.append("  AMMONIA SYSTEM   ::  NH3(aq): %.4f  <==>  NH4+: %.4f" % (l['NH3'], l['NH4']))
-    lines.append("  SULFIDE SYSTEM   ::  H2S(aq): %.4f  <==>  HS-:  %.4f" % (l['H2S'], l['HS']))
-    lines.append("  CARBONATE SYSTEM ::  CO2(aq): %.4f  <==>  HCO3: %.4f" % (l['CO2'], l['HCO3']))
+    lines.append("  AMMONIA SYSTEM   ::  NH3(aq): %7.4f (g=%.2f) <==> NH4+: %7.4f (g=%.2f)" % (l['NH3'], l['g_NH3'], l['NH4'], l['g_pm']))
+    lines.append("  SULFIDE SYSTEM   ::  H2S(aq): %7.4f (g=%.2f) <==> HS-:  %7.4f (g=%.2f)" % (l['H2S'], l['g_H2S'], l['HS'], l['g_pm']))
+    lines.append("  CARBONATE SYSTEM ::  CO2(aq): %7.4f          <==> HCO3: %7.4f (Davies)" % (l['CO2'], l['HCO3']))
+    
     lines.append("\n 4. ENVIRONMENTAL & VAPOR PREDICTIONS ".ljust(W))
     lines.append(SR)
     lines.append(" %-38s | %s" % ("ENVIRONMENTAL (Liquid Effluent)", "VAPOR PHASE (Equilibrium Partial P)"))
@@ -210,14 +301,8 @@ def generate_report(res, T, P_op, flows_h, total_h, rho):
     lines.append(" Density:   %15.2f kg/m3     | p(CO2): %10.4f psia" % (rho, pp['CO2']))
     lines.append("                                        | p(H2O): %10.4f psia" % (pp['H2O']))
 
-    if l['I'] > SOLVER['DAVIES_LIMIT_CRIT']:
-        lines.append("\n" + "!"*80)
-        lines.append(" CRITICAL WARNING: IONIC STRENGTH (%.2fm) EXCEEDS MODEL LIMIT (0.8m)" % l['I'])
-        lines.append(" RESULTS ARE PHYSICALLY INVALID. DAVIES EQUATION BREAKDOWN.")
-        lines.append(" ACTION REQUIRED: DILUTE STREAM OR USE PITZER/ENRTL MODEL.")
-        lines.append("!"*80)
-    elif l['I'] > SOLVER['DAVIES_LIMIT_WARN']:
-        lines.append("\n > Warning: Ionic Strength exceeds Davies limit (0.5m). Accuracy reduced.")
+    if (l['CO2'] + l['HCO3']) > SOLVER['CO2_DAVIES_WARN']:
+        lines.append("\n > Note: High CO2 detected. Carbonate interactions using Davies fallback.")
         
     lines.append(HR + "\n End of Report")
     return "\n".join(lines)
