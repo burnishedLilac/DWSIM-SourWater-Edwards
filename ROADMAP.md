@@ -1,32 +1,21 @@
-# SWEQ - Sour Water Equilibrium Solver 💧⚙️
+# 🗺️ SWEQ Project Roadmap
 
-**Version:** 8.1.0 (Enterprise Pitzer Edition)  
-**Integration:** DWSIM Python Script Unit Operation  
-**License:** GPLv3  
+SWEQ has evolved from a basic Davies-based equilibrium script into a robust Pitzer-driven simulator. The following roadmap outlines the strategic direction for future releases, focusing on expanding the thermodynamic limits, adding new components, and improving interoperability.
 
-SWEQ is an industrial-grade, open-source thermodynamic solver designed to calculate the vapor-liquid equilibrium (VLE) and ionic speciation of highly concentrated sour water systems ($NH_3 - H_2S - CO_2 - H_2O$). Built as a native Python Script for DWSIM, it bridges the gap between academic electrolyte models and heavy-duty refinery simulation.
+### 🟢 Phase 1: Stabilization & Edge Cases (Current - v8.x)
+- [x] **Pitzer Model Integration:** Implement Rumpf (1999) parameters for $NH_3-H_2S$ up to 120°C.
+- [x] **High Molality Damping:** Add numerical relaxation to prevent solver crashing at $I > 5.0$ molal.
+- [x] **Water Activity Suppression:** Osmotic correction for vapor pressure in heavy brines.
+- [ ] **Carbonate Matrix Expansion:** Research and implement specific Pitzer interaction parameters for $CO_2 / HCO_3^-$ to replace the current Davies fallback, fully unifying the ternary gas system.
+- [ ] **Density Engine Overhaul:** Replace empirical partial molar volumes ($v^\infty$) with rigorous Redlich-Meyer equations of state for high-pressure density predictions.
 
-## 🚀 Key Features
+### 🟡 Phase 2: The "Danish School" Upgrade (v9.0)
+- [ ] **Extended UNIQUAC Framework:** Transition the core thermodynamic engine from Pitzer to the **Extended UNIQUAC** model (Thomsen & Rasmussen, 1999). 
+    * *Goal:* Achieve flawless calculations from pure water solvent all the way to molten salt limits without the polynomial explosion risks inherent to the Pitzer model.
+- [ ] **Newton-Raphson Multivariable Solver:** Replace the nested bisection loops with an analytical Jacobian matrix solver to handle the highly non-linear surface area/volume fractions ($\theta$) of the UNIQUAC model.
+- [ ] **Amine Sweeting Integration:** Add parameters for standard alkanolamines (MEA, DEA, MDEA) to allow SWEQ to simulate full gas sweetening absorption units, not just sour water strippers.
 
-* **Extreme Concentration Engine:** Bypasses the traditional 0.5 - 0.8 molal physical limits of the extended Debye-Hückel/Davies equations. SWEQ v8.1 stably converges at ionic strengths exceeding **6.0+ molal**, handling the harshest stripper bottoms and atmospheric overhead condensates.
-* **State-of-the-Art Thermodynamics:** * **Equilibrium:** Edwards, Newman & Prausnitz (1978) weak electrolyte framework.
-  * **Activity Coefficients:** Implementation of the specific **Pitzer Activity Coefficient Model** calibrated for sour water (Rumpf et al., 1999) for $NH_4^+/HS^-$ pairs.
-  * **Hybrid Fallback:** Seamlessly utilizes the Davies equation as a thermodynamic fallback for minor carbonate species ($HCO_3^-, CO_3^{2-}$).
-* **Advanced Non-Ideal Physics:** * Exact modeling of the "salting-out" effect for dissolved neutral gases ($\gamma_{NH_3}$ and $\gamma_{H_2S}$).
-  * Osmotic mole fraction correction for water activity ($a_w$) depression in heavy brines.
-  * Poynting correction ($v^\infty$) for high-pressure operations.
-* **Robust Numerical Solver:** Features a custom charge-balance bisection loop fortified with a **Successive Substitution Damping algorithm** ($w = 0.5$). This acts as a mathematical shock absorber, completely eliminating non-linear oscillation and `Math Domain` errors during extreme stoichiometric imbalances.
-* **Automated Engineering Reports:** Generates comprehensive, scannable plain-text datasheets containing environmental metrics (mg/L), pH, phase statuses, bubble point pressures, and detailed chemical speciation with individual Pitzer coefficients.
-
-## 🛠️ Usage in DWSIM
-
-1. Add a **Python Script** Unit Operation to your DWSIM flowsheet.
-2. Connect an inlet stream (`ims1`) and two outlet streams (liquid `oms1`, vapor `oms2`).
-3. Paste the contents of `SWEQ_v8.1.py` into the script editor.
-4. Run the flowsheet. The solver will automatically detect the components (case-insensitive mapping for Ammonia, Hydrogen Sulfide, Carbon Dioxide, and Water), perform the flash calculation, update the streams, and save the detailed `SWEQ_Datasheet.txt` to your Desktop or `C:\Temp\`.
-
-## 📚 References
-* Edwards, T. J., Maurer, G., Newman, J., & Prausnitz, J. M. (1978). *Vapor‐liquid equilibria in multicomponent aqueous solutions of volatile weak electrolytes*. AIChE Journal.
-* Rumpf, B., Pérez-Salado Kamps, Á., Sing, R., & Maurer, G. (1999). *Simultaneous solubility of ammonia and hydrogen sulfide in water at temperatures from 313 K to 393 K*. Fluid Phase Equilibria.
-
----
+### 🔴 Phase 3: Standalone Architecture & Interoperability (v10.0+)
+- [ ] **CAPE-OPEN Compliance:** Package the SWEQ thermodynamic engine as a CAPE-OPEN Property Package, allowing it to be natively plugged into Aspen HYSYS, Aspen Plus, PRO/II, and other commercial simulators.
+- [ ] **Standalone GUI:** Develop a lightweight desktop application (using PyQt or CustomTkinter) for quick, on-the-fly sour water flash calculations without needing to open a full DWSIM flowsheet.
+- [ ] **Kinetic/Reactive Distillation:** Implement kinetic rate equations for $CO_2$ hydration to support rigorous non-equilibrium tray-by-tray distillation modeling.
